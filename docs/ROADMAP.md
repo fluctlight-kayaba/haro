@@ -2,28 +2,34 @@
 
 ## Context
 
-Haro is a coding agent built in MetaScript. The reference project is [pi](https://github.com/earendil-works/pi-mono) (~128K LOC TypeScript, 5 packages). We are NOT doing a 1:1 port — we're redesigning around MetaScript's unique capabilities.
+Haro is a terminal code platform for AI workflows, built in MetaScript. Three core design sources:
 
-### What pi has that we adapt
+- **Vimcraft** (Zig + Hermes) — rendering engine, multi-layer compositor, buffer ops, terminal I/O
+- **pi** (TypeScript/Node.js) — agent loop design, provider abstraction, tool dispatch, session format
+- **Neovim** — plugin philosophy, small core + powerful plugins
 
-| pi package | LOC | What it does | Haro equivalent |
-|---|---|---|---|
-| `pi-ai` | ~39K | 30+ LLM providers, auth, streaming | `provider/` — Anthropic first, std/http direct |
-| `pi-agent-core` | ~10K | agent loop, tool exec, streaming | `agent.ms` — AgentActor |
-| `pi-coding-agent` | ~55K | CLI, tools, sessions, extensions | `tools/`, `session.ms`, `main.ms` |
-| `pi-tui` | ~19K | terminal UI, differential render | Neon terminal backend |
-| `orchestrator` | ~3.5K | multi-agent coordination | Future |
+Not a 1:1 port of any of them — Haro merges their best ideas into one platform designed from the ground up for AI-assisted coding.
+
+### What we adapt from each source
+
+| Source | What we take | Haro equivalent |
+|---|---|---|
+| Vimcraft | Multi-layer compositor, display/cursor tracking, rope buffer, terminal raw I/O | `src/render/`, `src/input/` |
+| pi | Agent loop, provider abstraction, tool dispatch, JSONL session format | `src/agent/` |
+| Neovim | Small core + Raiser VM plugins, `haro.*` API, extensible defaults | `src/plugin/`, `src/defaults/` |
+| Lumen | Diff viewer UX, annotation flow | `src/defaults/diff.ms`, `src/defaults/annotate.ms` |
 
 ### What we do differently
 
-| Aspect | pi (TypeScript) | Haro (MetaScript) |
-|---|---|---|
-| Distribution | npm install + Node.js | Single binary, zero deps |
-| Memory | V8 GC | DRC deterministic |
-| Tool execution | Promise.all, shared state | Actor isolation, message passing |
-| Error handling | throw/catch, untyped | `Promise<Result<T,E>>`, typed |
-| Provider SDKs | 30+ npm packages | std/http direct, hand-written |
-| TUI | pi-tui (custom string[] renderer) | Neon terminal backend (in design) |
+| Aspect | pi (TypeScript) | Vimcraft (Zig) | Haro (MetaScript) |
+|---|---|---|---|
+| Distribution | npm + Node.js | Zig binary | Single binary, zero deps |
+| Memory | V8 GC | Manual + allocators | DRC deterministic |
+| Tool execution | Promise.all, shared state | N/A | Actor isolation, message passing |
+| Error handling | throw/catch, untyped | Zig errors | `Promise<Result<T,E>>`, typed |
+| Plugin system | TS extensions | Hermes JSI | Raiser VM (TypeScript, native) |
+| Rendering | pi-tui (string[] renderer) | Multi-layer compositor | Free-canvas compositor (ported from Vimcraft) |
+| Provider SDKs | 30+ npm packages | N/A | std/http direct, hand-written |
 
 ---
 
@@ -31,191 +37,166 @@ Haro is a coding agent built in MetaScript. The reference project is [pi](https:
 
 ### Phase 0: Foundation (current)
 
-**Goal**: Set up project, define types, prove the architecture works end-to-end.
+**Goal**: Project setup, define architecture, AGENTS.md, ROADMAP.
 
 - [x] Project repo, git, AGENTS.md
-- [ ] `provider/types.ms` — core types (Model, Context, Message, ToolCall, ToolResult, StreamEvent)
-- [ ] `provider/anthropic.ms` — Anthropic streaming API client via std/http
-- [ ] `agent.ms` — AgentActor: conversation loop, LLM stream consumption, tool dispatch
-- [ ] `tools/read.ms` — file read tool
-- [ ] `tools/bash.ms` — subprocess execution tool
-- [ ] `tools/write.ms` — file write tool
-- [ ] `tools/edit.ms` — find-replace edit tool
-- [ ] `main.ms` — CLI entry, simple stdin/stdout REPL (no TUI yet)
-- [ ] `system-prompt.ms` — AGENTS.md loader, basic prompt builder
+- [x] ROADMAP.md
+- [ ] Begin Phase 1
 
-**Milestone**: `./haro -p "list files in src/"` works end-to-end. LLM can read files and run bash.
+### Phase 1: Rendering Engine (ported from Vimcraft)
 
-### Phase 1: Terminal UI
+**Goal**: Terminal rendering works — compositor, display, buffer, input. The canvas can render text, layers, dirty-flag recomposition.
 
-**Goal**: Interactive TUI with streaming output, editor, message history.
+- [ ] `src/input/terminal.ms` — raw mode (termios), terminal size, resize detection
+- [ ] `src/input/keys.ms` — key event parsing, basic vim nav (j/k, gg/G, search)
+- [ ] `src/render/buffer.ms` — rope-based text buffer (read-heavy, review-optimized)
+- [ ] `src/render/display.ms` — ANSI output, synchronized updates, cursor tracking
+- [ ] `src/render/compositor.ms` — multi-layer compositing, dirty flags per layer
+- [ ] Render a file to terminal, navigate with j/k
 
-**Blocked on**: Neon terminal backend design decision (see below).
+**Milestone**: Open a file in Haro, see rendered text with line numbers, navigate with vim keys.
 
-- [ ] Neon terminal backend implemented
-- [ ] Message list component (scrollable, markdown)
-- [ ] Editor component (multi-line, autocomplete)
+**May need**: termios bindings in MetaScript stdlib (contribute to recompiler if missing).
+
+### Phase 2: Agent Core (adapted from pi)
+
+**Goal**: LLM communication works — Anthropic provider, tools, conversation loop. Agent can read files and run bash.
+
+- [ ] `src/agent/provider/types.ms` — Model, Context, Message, ToolCall, ToolResult, StreamEvent
+- [ ] `src/agent/provider/anthropic.ms` — Anthropic streaming API via std/http
+- [ ] `src/agent/tools/read.ms` — file read tool
+- [ ] `src/agent/tools/bash.ms` — subprocess execution tool
+- [ ] `src/agent/tools/write.ms` — file write tool
+- [ ] `src/agent/tools/edit.ms` — find-replace edit tool
+- [ ] `src/agent/loop.ms` — conversation loop, LLM stream consumption, tool dispatch
+- [ ] `src/agent/session.ms` — JSONL session persistence
+- [ ] `src/defaults/system-prompt.ms` — AGENTS.md loader, prompt builder
+
+**May need**: SSE parser in MetaScript (contribute to recompiler stdlib if missing).
+
+**Milestone**: `./haro -p "list files in src/"` works. LLM reads files, runs bash, responds.
+
+### Phase 3: Basic TUI (rendering + agent, end-to-end)
+
+**Goal**: Interactive mode. Agent output rendered on the free-canvas compositor, vim navigation, streaming text.
+
+- [ ] `src/main.ms` — CLI entry, mode dispatch (interactive, print, diff)
+- [ ] Agent output → compositor layer (streaming text display)
+- [ ] Basic message/conversation view on canvas
 - [ ] Footer (model, token usage, cost)
-- [ ] Streaming text display (incremental render)
+- [ ] Input line (prompt entry)
 
-**Milestone**: `./haro` drops into an interactive session with streaming responses and tool output.
+**Milestone**: `./haro` drops into interactive session. Type a prompt, see streaming response on canvas.
 
-### Phase 2: Session Persistence
+### Phase 4: Diff Viewer Plugin
 
-- [ ] JSONL session format
-- [ ] Session tree with branching (parentId pointers)
+**Goal**: Side-by-side diff viewer as a default plugin. Agent changes visible as diffs.
+
+- [ ] `src/defaults/diff.ms` — parse git diff into structured hunks
+- [ ] Side-by-side rendering on compositor (diff layer)
+- [ ] `./haro diff` mode
+- [ ] `./haro diff HEAD~1` — specific commit
+- [ ] Diff-specific nav (jump between hunks with `{/}`)
+
+**Milestone**: `./haro diff` shows side-by-side diff with syntax highlighting.
+
+### Phase 5: Annotation Plugin (bidirectional)
+
+**Goal**: Human↔Agent annotation on diffs. Both sides can annotate, annotations persist, tagged by author.
+
+- [ ] `src/defaults/annotate.ms` — annotation types, persistence (JSONL)
+- [ ] Annotate selection/hunk/file (press `i`)
+- [ ] View all annotations (press `I`)
+- [ ] Agent can pre-seed annotations (programmatically)
+- [ ] Annotation gutter indicators (▍) on compositor
+- [ ] Send annotations to agent as next prompt (press `s`)
+
+**Milestone**: Agent makes changes, human opens diff, annotates feedback, agent reads and fixes.
+
+### Phase 6: Raiser Plugin System
+
+**Goal**: Third-party plugins via Raiser VM. `haro.*` API for buffers, events, agent, annotation.
+
+- [ ] `src/plugin/host.ms` — plugin lifecycle, sandboxing
+- [ ] `src/plugin/api.ms` — haro.* API surface
+- [ ] Plugin discovery (`~/.haro/plugins/`, `.haro/plugins/`)
+- [ ] Hot reload
+
+**Blocked on**: Raiser VM readiness (verify API surface).
+
+**Milestone**: Write a plugin that adds a custom tool or command.
+
+### Phase 7: Session Persistence
+
+- [ ] JSONL session format (tree structure, parentId branching)
 - [ ] `/resume`, `/new`, `/tree` commands
 - [ ] Compaction for long sessions
+- [ ] Session export/import
 
-### Phase 3: Multi-Provider
+### Phase 8: Multi-Provider
 
 - [ ] OpenAI provider (openai-responses API)
 - [ ] Google provider (google-generative-ai API)
 - [ ] Model selector UI
 - [ ] Cross-provider message transformation
 
-### Phase 4: Extensibility
+### Phase 9: Advanced
 
-- [ ] Extension system (custom tools, commands)
-- [ ] Skills (on-demand capability packages)
-- [ ] Prompt templates
-- [ ] Theme support
-
-### Phase 5: Advanced
-
+- [ ] Tree-sitter syntax highlighting
 - [ ] OAuth (Claude Pro, ChatGPT Plus)
-- [ ] Session export/import
-- [ ] RPC mode for editor integration
+- [ ] RPC mode for process integration
 - [ ] More tools (grep, find, glob, ls)
+- [ ] Skills (on-demand capability packages)
+- [ ] Theme support
 
 ---
 
 ## Key Design Decisions
 
-### 1. Actor model for tools
+### 1. Free-canvas compositor (from Vimcraft)
+
+Multi-layer compositor — each concern is a separate layer (base text, gutter, diff, annotation, cursor, overlay). Dirty flags per layer, only recomposite what changed.
+
+**Why**: Not locked to "editor with lines of text." The canvas renders code, diffs, annotations, agent output, custom plugin UI. Plugins add layers — they don't fight for screen space.
+
+### 2. Actor model for tools
 
 Each tool is an actor — isolated state, crash-safe. The agent dispatches tool calls via message passing.
 
-```
-AgentActor
-  ├── sends: { toolCallId, name, args }
-  ├── receives: { toolCallId, result }
-  └── tools run independently — one tool crashing doesn't crash the agent
-```
-
 **Why**: In pi, tool crashes propagate through Promise chains and can kill the whole run. Actor isolation means a bash tool crash is recoverable.
 
-**Tradeoff**: More ceremony than a function call. Worth it for robustness.
+### 3. `Promise<Result<T,E>>` for LLM calls
 
-### 2. `Promise<Result<T,E>>` for LLM calls
+No throw/catch in async paths. LLM streaming returns typed results. Use `try await` to unwrap.
 
-No throw/catch in async paths. LLM streaming returns `Promise<Result<StreamEvent, ProviderError>>`. Use `try await` to unwrap.
+**Why**: Typed errors mean the compiler enforces error handling. No surprise rejections.
 
-**Why**: Typed errors mean the compiler enforces error handling. No surprise rejections. `try await provider.stream(...)` either returns a value or early-returns a typed error.
+### 4. Raiser VM for plugins
 
-### 3. std/http for provider APIs
+Plugins in TypeScript, run on Raiser VM. Same model as Neovim's Lua, but TypeScript.
 
-No npm SDK packages. Provider implementations use `std/http` directly — build the request, parse SSE stream, emit events.
+**Why**: We own MetaScript + Raiser — can fix any limitation. No external JS engine (Hermes), no C++ bridge. Plugins get native-grade performance.
 
-**Why**: Zero deps = single binary. Also, provider SDKs are thin wrappers over HTTP anyway. We control the streaming, error handling, and timeout behavior.
+### 5. Rendering in-core
 
-### 4. Neon for TUI
+Haro's rendering engine is ported from Vimcraft, living in `src/render/`.
 
-UI lives in Neon (`~/metascript/neon`), not in haro. haro imports Neon components.
-
-**Why**: Neon already has reactivity (signals, effects), VNode tree, reconciler, and Host abstraction. Adding a terminal backend to Neon benefits all Neon users, not just haro.
+**Why**: Haro needs a terminal-native compositor optimized for code review/diff/annotation. Vimcraft's multi-layer compositor is purpose-built for this — dirty flags per layer, cell-level diff, synchronized output. Terminal is a 2D grid, not a nested UI tree; no layout engine or reconciler needed.
 
 ---
 
 ## Open Design Questions
 
-### Terminal backend for Neon
-
-**The big question**: How does Neon render to terminal?
-
-Neon's 3-layer model:
-- Layer A (Reconcile): VNode tree → host node mutations — **Neon owns, already built**
-- Layer B (Paint): host nodes → pixels/characters — **platform-specific**
-- Layer C (GPU/output): actual rendering — **platform-specific**
-
-For terminal, Layer B+C = "host node tree → ANSI string[] → stdout".
-
-Three approaches under consideration:
-
-| | A: VNode-first (Host adapter) | B: Reactive string[] (pi-tui style) | C: Hybrid |
-|---|---|---|---|
-| **Throughput** | JSX → VNode → reconcile → TerminalNode → paint → string[] | signal → effect → component.render(width) → string[] | mixed |
-| **Code sharing** | Max — same JSX for browser + terminal | Min — terminal UI code is separate | Partial |
-| **Layout** | Needs terminal layout engine | Each component wraps manually | VNode for simple, manual for complex |
-| **Terminal fit** | Poor — terminal has no real nesting/GPU | Good — string[] is native terminal output | Medium |
-| **Complexity** | High — layout engine, reconcile in terminal | Low — proven by pi-tui | Medium |
-| **Reactivity** | Neon reconciler drives updates | Neon signals drive re-render | Both |
-
-**Status**: Brainstorming. Need to decide before Phase 1.
-
-**Key insight**: Haro's UI components (MessageList, Editor, Footer, SelectList) are very terminal-specific. Editor and SelectList are hard to express as generic VNodes. This favors B or C.
-
-**Key counter-insight**: If Neon wants terminal as a first-class platform (not just for haro), the VNode-first approach (A) gives the most long-term value — same code runs on browser, iOS, terminal.
-
-### Tool execution model
-
-**Question**: Actors (Erlang-style, message passing) vs spawn (thread pool, Promise-based)?
-
-Both are available in MetaScript. Actors give isolation + supervision but add message-passing overhead. spawn is simpler but shares process state.
-
-**Leaning**: Actors for tools (isolation is valuable), spawn for internal parallelism (e.g., concurrent file reads within a single tool).
-
-**Status**: Defer until Phase 0 proves the basic loop works. Start with simple async functions, promote to actors when we hit the isolation need.
-
-### Session format
-
-**Question**: JSONL (pi-compatible) vs MetaScript struct serialization (binary)?
-
-JSONL is human-readable, pi-compatible, easy to debug. Struct serialization is faster but opaque.
-
-**Leaning**: JSONL first (debugging + pi compat), consider binary later if performance matters.
-
----
-
-## Reference: pi's Architecture
-
-For context when designing haro's counterparts.
-
-### pi message flow
-
-```
-User types prompt
-  → coding-agent sends to agent
-    → agent sends to ai provider
-      → ai calls LLM API (streaming SSE)
-        → LLM returns text + tool calls
-      → ai parses stream into events
-    → agent dispatches tool calls
-      → tools execute (read/write/bash/edit)
-    → agent collects tool results
-    → agent sends results back to LLM
-  → coding-agent renders output to TUI
-```
-
-### pi's tool execution
-
-```
-AgentMessage[] → transformContext() → convertToLlm() → Message[] → LLM
-```
-
-Events: `agent_start` → `turn_start` → `message_start` → `message_update` (streaming) → `message_end` → `tool_execution_start` → `tool_execution_end` → `turn_end` → `agent_end`
-
-### pi's TUI approach
-
-Each component implements `render(width: number): string[]`. Differential rendering compares line arrays frame-to-frame, only outputs changed lines. Synchronized output (`\x1b[?2026h ... \x1b[?2026l`) for flicker-free updates.
-
-This is **Option B** (reactive string[]) in our terminal backend question — pi-tui already proves it works.
+- **Raiser VM readiness**: is it stable enough to host plugins? Need to verify API surface before Phase 6.
+- **Terminal raw I/O**: MetaScript stdlib needs termios bindings (raw mode, winsize). May need to contribute to recompiler stdlib.
+- **SSE parsing**: provider streaming needs Server-Sent Events parser. Not in MetaScript stdlib yet.
+- **Buffer data structure**: rope (like Vimcraft Zig) or gap buffer or piece table? Rope is proven but complex.
+- **Annotation persistence**: JSONL (simple) vs struct serialization (binary, faster).
+- **Tool execution model**: start with simple async functions, promote to actors when isolation need arises.
 
 ---
 
 ## MetaScript stdlib availability
-
-What we need vs what exists:
 
 | Need | Status | Module |
 |---|---|---|
