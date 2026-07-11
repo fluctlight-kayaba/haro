@@ -1,0 +1,5 @@
+.metascript-cache/
+out/
+build/
+*.o
+haro
