@@ -85,6 +85,25 @@ Layer 600: overlay         ← modals, annotation editor, command palette
 
 Dirty flags per layer — only recomposite what changed.
 
+### Platform Backends
+
+Anything OS-specific hides behind an interface with one impl per platform, selected at build time — never `#ifdef`-style branching inside a shared file. Code above the interface never knows which OS it runs on.
+
+Convention (first instance: the `Terminal` interface):
+
+```
+input/
+├── terminal.ms           interface + factory (picks impl by build target)
+├── terminal_posix.ms     extern → libc (termios, ioctl)      — --os=macos/linux
+├── terminal_windows.ms   extern → kernel32 (console API)     — --os=windows
+└── terminal_virtual.ms   in-memory queue + capture           — always compiled
+```
+
+Rules:
+- `_posix` / `_windows` / `_virtual` suffix; the bare name (`terminal.ms`) holds the interface + factory.
+- The build selects the real backend per `--os`; the `_virtual` impl is **always** compiled — every sim test runs on it, on any OS.
+- ANSI/VT is the shared wire format both platforms speak (Windows 10 1511+ with VT mode on). Rendering, diff, and key parsing stay platform-agnostic — only raw-mode, size query, and read/write differ.
+
 ## Design Principles
 
 1. **AI-first, not AI-bolted-on** — the platform is designed around agent workflows. Review, direct, annotate are first-class. Manual editing is secondary but available.
@@ -128,8 +147,13 @@ Same model as Neovim's Lua API, but TypeScript via Raiser VM.
 ## Build & Run
 
 ```bash
-# Build native binary
+# Build native binary (host platform)
 msc build src/main.ms --target=c --output=haro
+
+# Cross-compile — build selects the platform backend (_posix / _windows)
+msc build src/main.ms --os=macos   --output=haro
+msc build src/main.ms --os=linux   --output=haro
+msc build src/main.ms --os=windows --output=haro.exe
 
 # Run
 ./haro                          # interactive mode
