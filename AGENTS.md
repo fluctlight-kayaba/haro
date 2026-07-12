@@ -34,7 +34,7 @@ haro/
 ├── src/
 │   ├── main.ms                  ← entry: parse args, boot platform
 │   │
-│   ├── render/                  ← Terminal rendering engine (ported from Vimcraft)
+│   ├── render/                  ← Terminal rendering engine
 │   │   ├── compositor.ms        ← Multi-layer compositing (base, gutter, diff, annotation, cursor)
 │   │   ├── display.ms           ← ANSI output, synchronized updates, cursor tracking
 │   │   └── buffer.ms            ← Rope-based text buffer (read-heavy, review-optimized)
@@ -69,7 +69,7 @@ haro/
 └── build.ms                     ← MetaScript build config
 ```
 
-### Layer model (from Vimcraft)
+### Layer model
 
 Multi-layer compositor — each concern is a separate layer, blended per frame:
 
@@ -148,7 +148,7 @@ msc test src/
 
 ## Related Projects
 
-- **Vimcraft** ([github.com/vimcraft-labs/vimcraft](https://github.com/vimcraft-labs/vimcraft)): the Zig + Hermes predecessor. Rendering engine, compositor, buffer ops are ported from here. Local reference at `~/metascript/vimcraft`.
+- **Vimcraft** ([github.com/vimcraft-labs/vimcraft](https://github.com/vimcraft-labs/vimcraft)): the Zig + Hermes predecessor. Rendering engine, compositor, buffer ops are ported from here.
 - **Neovim** ([neovim.io](https://neovim.io)): plugin philosophy and API design reference.
 - **recompiler** ([github.com/metascriptlang/recompiler](https://github.com/metascriptlang/recompiler)): the MetaScript language and compiler. If haro hits a compiler limitation, fix it there.
 - **pi** ([github.com/earendil-works/pi-mono](https://github.com/earendil-works/pi-mono)): reference for agent loop design and provider patterns.
@@ -173,12 +173,86 @@ JSONL with tree structure (like pi). Each line: `{ id, parentId, role, content, 
 | 8 | More providers (OpenAI, Google) | Future |
 | 9 | Tree-sitter syntax highlighting | Future |
 
+## Implementation Methodology
+
+Goal-driven, test-first, everything reproducible on a virtual runtime. The full framework — goals, principles, test levels, lessons learned — lives in **`docs/METHODOLOGY.md`**. Read it before implementing any subsystem.
+
+The short version:
+
+- **Core loop**: failing test first, at the lowest level that can express the behavior → minimal implementation → pass → refactor. Bug fixes start with a failing regression test — that is the definition of "reproduced".
+- **Real pipeline, virtual boundary**: the platform runs against a `Terminal` interface (real: termios; virtual: in-memory input queue + output capture). Sim tests inject bytes, the real pipeline processes them, assertions read state + captured ANSI + counters. In-process, synchronous — no IPC, no sleeps.
+- **Deterministic assertions**: pipeline counters and thresholds, not golden files, not wall-clock.
+- **Tests graduate or die**: debug scratch lives in /tmp, never committed; a test either becomes a named suite or gets deleted.
+- **MetaScript idiom**: `struct` for value types, `interface` for reference types, `match` for dispatch, closures for callbacks, `test`/`assert` with power assert. Zig→MetaScript translation patterns in `docs/VIMCRAFT-DELTA.md`.
+
+## Rendering Reference
+
+Haro's rendering engine implements a three-stage pipeline: compositor → diff → ANSI render. The algorithms descend from Neovim's grid protocol and Helix's terminal optimizations, but are implemented natively in MetaScript — no allocator threading, no function-pointer callbacks, no manual refcounting.
+
+### Three-stage pipeline
+
+```
+Stage 1: Compositor    — blend N layers in z-order (Porter-Duff "over")
+Stage 2: Diff          — compare current vs previous frame, output only changed cells
+Stage 3: ANSI Render   — generate escape codes with adjacent-skip + attribute dedup
+```
+
+**Stage 1 — Compositor**: Blend layers back-to-front (painter's algorithm). Fast path: opacity = 1.0 and cell has content → direct copy (95% of cells). Dirty rectangle incremental: only re-composite cells within dirty rects.
+
+**Stage 2 — Diff**: Double buffer (current + previous grid). Compare cell-by-cell on dirty lines only. Initial previous uses sentinel (char=0) so first render detects all cells as changed. Typical frame: 2-400 changed cells, not full grid.
+
+**Stage 3 — ANSI Render**: Generate escape codes with:
+- Adjacent cell skipping (skip cursor move if next update is adjacent)
+- Attribute deduplication (only emit SGR codes when bold/italic/underline/fg/bg changes)
+- Cross-frame attribute tracking (state persists between frames)
+- Synchronized updates (DCS sequences `\x1bP=1s...\x1b\\` wrap output for atomic flush, eliminates tearing on iTerm2/Alacritty/WezTerm/tmux)
+
+### Screen grid — O(1) scroll via line-offset indirection
+
+Double buffer: `current[height][width]` and `previous[height][width]`. `Cell` is a value-type struct (stack-allocated, zero RC overhead):
+
+```typescript
+struct Cell {
+    char: u21;           // Unicode codepoint
+    fg: uint32;          // packed RGB
+    bg: uint32;
+    attrs: uint8;        // bold | italic | underline
+    is_wide: boolean;    // second cell of double-width char
+}
+```
+
+Scrolling rotates an `offsets[]` array (logical row → physical row mapping) instead of copying cells. For a 200×50 terminal scrolling 1 line: 50 offset updates vs 10,000 cell copies. `swapBuffers()` is O(1) — pointer swap + rotate offset arrays.
+
+### Rope buffer
+
+Tree-based rope, leaf ~512 bytes. O(log n) insert/delete/concat. `newline_count` cached per node → `lineCount()` and `byteOfLine()` are O(log n). UTF-8 safe split points (walk backward through continuation bytes to find character start). DRC refcounting enables node sharing for undo without manual refcount management.
+
+### Layer system (z-index ordering)
+
+| z-index | Layer | Purpose |
+|---------|-------|---------|
+| 0 | base | buffer text content |
+| 100 | gutter | line numbers, signs, annotation indicators (▍) |
+| 200 | cursorline | current line highlight |
+| 300 | virtual_text | plugin overlays (annotations, agent notes) |
+| 400 | selection | visual selection highlight |
+| 500 | diff | diff highlights (added/removed/changed) |
+| 600 | overlay | modals, annotation editor, command palette |
+
+Each layer has its own grid + dirty flag + dirty rect tracker. Layers sorted by z-index via binary search insertion. Dirty flags per layer — only recomposite what changed.
+
+### Terminal I/O
+
+Raw mode via termios: disable `ECHO`, `ICANON`, `ISIG`, `IXON`, `ICRNL`. Set `VMIN=1, VTIME=0` (blocking read, wait for ≥1 byte). Enter alternate screen buffer (`\x1b[?1049h`). Enable SGR mouse mode (1006) + bracketed paste (2004).
+
+Input handling: persistent byte buffer (append, don't replace across `stdin.read()` calls). Parse returns `complete` / `incomplete` / `none`. ESC timeout tracking — when ESC received alone, wait before treating as standalone vs start of escape sequence.
+
 ## Open Design Questions
 
 - **Raiser VM readiness**: is it stable enough to host plugins? Need to verify API surface before Phase 6.
 - **Terminal raw I/O**: MetaScript stdlib needs termios bindings (raw mode, winsize). May need to contribute to recompiler stdlib.
 - **SSE parsing**: provider streaming needs Server-Sent Events parser. Not in MetaScript stdlib yet.
-- **Buffer data structure**: rope (like Vimcraft Zig) or gap buffer or piece table? Rope is proven but complex.
+- **Buffer data structure**: rope — tree-based, leaf ~512 bytes, O(log n) edits. Proven, refcounted node sharing for undo. See Implementation Methodology below.
 - **Annotation persistence**: JSONL (simple) vs struct serialization (binary, faster).
 
 ## Git Rules
