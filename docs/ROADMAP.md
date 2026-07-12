@@ -190,7 +190,7 @@ Haro's rendering engine is ported from Vimcraft, living in `src/render/`.
 - **Raiser VM readiness**: is it stable enough to host plugins? Need to verify API surface before Phase 6.
 - **Terminal raw I/O**: MetaScript stdlib needs termios bindings (raw mode, winsize). May need to contribute to recompiler stdlib.
 - **SSE parsing**: provider streaming needs Server-Sent Events parser. Not in MetaScript stdlib yet.
-- **Buffer data structure**: rope (like Vimcraft Zig) or gap buffer or piece table? Rope is proven but complex.
+- **Buffer data structure**: rope (like Vimcraft Zig). Decided — proven, O(log n) edits, refcounted node sharing for undo. See VIMCRAFT-DELTA.md for why DRC makes rope node sharing cheaper than Zig's manual refcounting.
 - **Annotation persistence**: JSONL (simple) vs struct serialization (binary, faster).
 - **Tool execution model**: start with simple async functions, promote to actors when isolation need arises.
 
@@ -211,3 +211,18 @@ Haro's rendering engine is ported from Vimcraft, living in `src/render/`.
 | SSE parsing | **Missing** | Need: SSE event parser for provider streaming |
 
 **Gaps**: Terminal raw I/O and SSE parsing need to be built (either in haro or contributed to MetaScript stdlib).
+
+---
+
+## Vimcraft Delta: What MetaScript Changes
+
+See [`docs/VIMCRAFT-DELTA.md`](./VIMCRAFT-DELTA.md) for the full analysis. Summary:
+
+- **JSI bridge disappears**: No Hermes, no C++ bridge, no HostObject, no StaticStringMap. Raiser VM runs MetaScript natively. ~4000 LOC glue code eliminated.
+- **Allocators disappear**: DRC handles memory. `struct Cell` is stack-allocated, zero RC overhead on the rendering hot path.
+- **Closures replace function pointers**: Event handlers, renderers, callbacks are arrow functions with natural scope capture — no context structs.
+- **Macros enable compile-time generation**: Tool schemas, system prompt assembly, session serialization — all baked into the binary at compile time.
+- **Actors give tool isolation for free**: Crash-safe tools via built-in actor model (impossible in Zig without building a runtime).
+- **`Promise<Result<T,E>>` gives typed async errors**: Compiler-enforced, no throw/catch in async paths.
+
+The algorithms (compositor, diff, rope, ANSI optimization) port directly. What changes is everything around them.
