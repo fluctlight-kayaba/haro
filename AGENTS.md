@@ -94,14 +94,14 @@ Convention (first instance: the `Terminal` interface):
 ```
 input/
 ├── terminal.ms           interface + factory (picks impl by build target)
-├── terminal_posix.ms     extern → libc (termios, ioctl)      — --os=macos/linux
-├── terminal_windows.ms   extern → kernel32 (console API)     — --os=windows
-└── terminal_virtual.ms   in-memory queue + capture           — always compiled
+├── terminalPosix.cms     extern → libc (termios, ioctl)      — --os=macos/linux
+├── terminalWindows.cms   extern → kernel32 (console API)     — --os=windows
+└── terminalVirtual.ms    in-memory queue + capture           — always compiled
 ```
 
 Rules:
-- `_posix` / `_windows` / `_virtual` suffix; the bare name (`terminal.ms`) holds the interface + factory.
-- The build selects the real backend per `--os`; the `_virtual` impl is **always** compiled — every sim test runs on it, on any OS.
+- `Posix` / `Windows` / `Virtual` camelCase suffix; the bare name (`terminal.ms`) holds the interface + factory.
+- The build selects the real backend per `--os`; the `Virtual` impl is **always** compiled — every sim test runs on it, on any OS.
 - ANSI/VT is the shared wire format both platforms speak (Windows 10 1511+ with VT mode on). Rendering, diff, and key parsing stay platform-agnostic — only raw-mode, size query, and read/write differ.
 
 ## Design Principles
@@ -279,7 +279,20 @@ Input handling: persistent byte buffer (append, don't replace across `stdin.read
 - **Buffer data structure**: rope — tree-based, leaf ~512 bytes, O(log n) edits. Proven, refcounted node sharing for undo. See Implementation Methodology below.
 - **Annotation persistence**: JSONL (simple) vs struct serialization (binary, faster).
 
+## Naming Conventions
+
+Prefer **camelCase** everywhere — file names and code identifiers, in both MetaScript and C.
+
+- **File names**: camelCase — `terminal.ms`, `terminalVirtual.ms`, `terminalPosix.cms`. The platform suffix is camelCase too (`Posix` / `Windows` / `Virtual`), never `snake_case`.
+- **Types** (interface, struct, class, enum): PascalCase — `Terminal`, `TermSize`, `VirtualTerminal`.
+- **Functions, fields, locals**: camelCase — `newVirtualTerminal`, `enterRaw`.
+- **C code**: camelCase for symbols we own (companion `.c` helpers, exported names). External symbols we don't own — libc (`tcgetattr`, `ioctl`), kernel32 (`SetConsoleMode`) — keep their real names; that snake_case is the only sanctioned fallback, forced by the platform API.
+
 ## Git Rules
+
+NEVER commit without asking first. Before any `git commit`, present the plan — the file list and the exact commit message(s) — and wait for explicit approval. Review happens together, before the commit, not after. This holds even during `/split-commit`: propose the split, then stop.
+
+NEVER push without asking.
 
 NEVER use `git stash`, `git reset`, `git checkout .`, `git restore`, or any command that discards working tree state.
 
